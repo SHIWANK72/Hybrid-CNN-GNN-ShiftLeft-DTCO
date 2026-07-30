@@ -1,0 +1,1125 @@
+# PHASE 14.4 — RTL STANDARDIZATION & NORMALIZATION SPECIFICATION
+
+**Series:** AI-Driven Design Technology Co-Optimization for Early Prediction and Mitigation of Manufacturing, Packaging, and Reliability Challenges in Semiconductor Systems
+**Document Class:** Industrial Engineering Specification — Data Engineering Pipeline
+**Phase Position:** 14.4 of N (follows 14.1 Dataset Generation Pipeline, 14.2 Benchmark Acquisition Specification (BDAS), 14.3 Dataset Annotation & Label Generation Specification; precedes 14.5 Logic Synthesis)
+**Target Venues:** IEEE ICM 2026, IEEE TCAD, IEEE TVLSI, IEEE Transactions on Semiconductor Manufacturing, DAC, ICCAD, DATE
+**Document Status:** Specification — Non-Implementational
+**Author Context:** Nik-Coronics Independent R&D Initiative
+
+---
+
+## PREFACE AND SCOPE NOTICE
+
+This document specifies the RTL Standardization & Normalization subsystem of the dataset engineering pipeline described across Phase 14.1 through the present phase. It defines the architecture, policies, transformation rules, metadata contracts, and validation strategy required to convert heterogeneous benchmark RTL — acquired and license-cleared under Phase 14.2 — into a reproducible, synthesis-ready RTL representation suitable for consumption by Phase 14.5 (Logic Synthesis).
+
+This document does **not** redefine, restate, or modify any policy established in Phases 14.1–14.3. Where this specification depends on artifacts, identifiers, or conventions introduced in earlier phases (`benchmark_id`, `version_tag`, dataset manifest schema, checksum philosophy, four-axis versioning), those definitions are treated as fixed inputs and are referenced, not reproduced.
+
+This document explicitly excludes the following, each of which is reserved for its own phase:
+
+- Logic synthesis, technology mapping, or gate-level netlist generation (Phase 14.5)
+- Feature extraction of any kind, node/edge/spatial/global (a later phase)
+- Ground-truth label generation (covered exclusively in Phase 14.3)
+- Placement, routing, or any physical design step
+- Any ML model architecture, training procedure, or inference pipeline
+
+The RTL Standardization & Normalization subsystem occupies a narrow, precisely bounded position in the pipeline: it accepts acquired RTL as an immutable input and produces a normalized, synthesis-ready RTL derivative as its sole output, together with the metadata, logs, and validation artifacts required to make that transformation auditable and reproducible at the scale required for large benchmark corpora and multi-PDK dataset generation campaigns.
+
+---
+
+## CHAPTER 1 — INTRODUCTION
+
+### 1.1 Purpose
+
+Chapter 1 establishes the motivation for treating RTL standardization as a first-class, independently specified pipeline stage rather than an informal preprocessing step folded into synthesis scripting. In academic and industrial EDA-for-ML literature, RTL "cleanup" is frequently treated as an implementation detail unworthy of documentation. This specification takes the opposite position: because the downstream dataset's validity depends on every benchmark entering synthesis in a structurally consistent, functionally unaltered, and provenance-tracked form, RTL standardization must be treated with the same rigor as ground-truth label generation.
+
+### 1.2 Theory and Engineering Rationale
+
+Benchmark corpora assembled from heterogeneous sources (academic suites, open silicon projects, industrial reference designs) exhibit wide variance in coding style, tool-specific pragmas, file organization, and even RTL dialect. Feeding this heterogeneity directly into a shared synthesis flow introduces two classes of risk relevant to a dataset intended for machine learning consumption: (1) confounded variance, where downstream physical design outcomes differ across benchmarks partly due to incidental coding-style artifacts rather than genuine architectural or structural properties, which corrupts the causal interpretability of any learned model; and (2) flow fragility, where tool-specific constructs cause synthesis failures that silently reduce dataset coverage in ways correlated with benchmark origin rather than benchmark difficulty. Standardization directly addresses both risks by establishing a single, deterministic, benchmark-agnostic normalization procedure applied uniformly across the corpus.
+
+### 1.3 Industrial Motivation
+
+Commercial EDA methodology teams universally maintain an RTL "linting and normalization gate" prior to synthesis handoff, precisely because uncontrolled RTL variance is a leading source of non-reproducible tapeout schedules. This phase mirrors that industrial practice, adapted for the dataset-generation context: instead of a human methodology engineer manually adjudicating each RTL exception, the process is fully specified, deterministic, and automatable across thousands of benchmark instances and PDK/technology combinations.
+
+### 1.4 Relationship to Prior Phases
+
+Phase 14.2 guarantees that acquired RTL is authentic, versioned, checksummed, and license-cleared, but explicitly performs no structural transformation. Phase 14.1 references RTL standardization only as a named stage in the master pipeline without specifying its internals. Phase 14.4 is therefore the first point in the series at which RTL content itself is examined, classified, and transformed — under the constraint that the original acquired artifact from 14.2 is never touched.
+
+### 1.5 Reviewer Expectations
+
+An IEEE Artifact Evaluation reviewer examining this phase will expect explicit answers to: what exactly is changed in the RTL and why; what guarantees exist that behavior is unchanged; how the transformation is proven deterministic across reruns, machines, and tool versions; and how a reviewer could audit any single transformed file back to its original acquisition record. Every subsequent chapter is structured to preempt these questions.
+
+---
+
+## CHAPTER 2 — OBJECTIVES
+
+### 2.1 Purpose
+
+This chapter enumerates the binding objectives of the RTL Standardization & Normalization subsystem, each of which is treated as a hard requirement rather than an aspiration.
+
+### 2.2 Primary Objectives (Restated as Engineering Requirements)
+
+| # | Objective | Engineering Requirement |
+|---|---|---|
+| 1 | Normalize heterogeneous RTL coding styles | Uniform lexical, structural, and organizational conventions across all benchmark origins |
+| 2 | Produce synthesis-ready RTL | Zero unresolved dependencies, zero unsupported constructs, at handoff to Phase 14.5 |
+| 3 | Preserve functional equivalence | No transformation may alter simulated or synthesized behavior |
+| 4 | Preserve benchmark provenance | Every derived file traceable to its exact `benchmark_id` / `version_tag` origin |
+| 5 | Ensure open-source and commercial EDA compatibility | Output must be consumable without modification by both OpenROAD-class and commercial-class flows |
+| 6 | Enable scalable automation | No manual, per-benchmark intervention in steady-state operation |
+| 7 | Support future PDKs | No PDK-specific assumptions embedded in standardized RTL |
+| 8 | Support reproducible ML dataset generation | Byte-identical output given identical input, tool versions, and configuration |
+
+### 2.3 Engineering Rationale
+
+Each objective above is deliberately stated as a testable property rather than a qualitative goal, consistent with the project's publication-readiness requirement: an Artifact Evaluation reviewer must be able to construct a concrete test for each objective (e.g., re-running the standardization pipeline twice and diffing output for Objective 8).
+
+### 2.4 Non-Objectives
+
+This phase does not attempt to optimize RTL for area, timing, or power; does not attempt to modernize design intent (e.g., converting a state machine's encoding style); and does not attempt to infer or repair broken functional intent. Any RTL whose functional correctness cannot be preserved through style-level transformation is excluded via the Eligibility Rules of Chapter 10, not silently "fixed."
+
+---
+
+## CHAPTER 3 — SCOPE
+
+### 3.1 In-Scope
+
+RTL Standardization & Normalization is in scope for: lexical and naming normalization; hierarchy and module-boundary preservation verification; clock and reset signal discovery and metadata tagging; parameter and generate-construct resolution recording; dependency and include/package resolution; identification and quarantine of unsynthesizable or unsupported constructs; structural integrity and functional-equivalence-preserving validation; and full provenance, metadata, and manifest generation for every derived artifact.
+
+### 3.2 Out-of-Scope
+
+The following are explicitly excluded from Phase 14.4 and are the responsibility of other phases: elaboration into a technology-mapped netlist (14.5); timing, power, congestion, or any other label computation (14.3); feature encoding of any kind; RTL functional verification beyond structural/equivalence-preserving checks (i.e., this phase does not perform full formal verification or simulation-based validation against a testbench, which is outside the pipeline's mandate); and any decision regarding benchmark inclusion/exclusion on licensing grounds (14.2, already resolved prior to this phase).
+
+### 3.3 Boundary Conditions
+
+The precise handoff boundary with Phase 14.2 is the acquired, checksummed, license-cleared RTL tree referenced by a fixed `benchmark_id`/`version_tag` pair. The precise handoff boundary with Phase 14.5 is a standardized RTL tree accompanied by a Standardization Manifest (Chapter 31) that Phase 14.5 consumes as a read-only input, exactly mirroring the pattern by which Phase 14.4 itself consumes Phase 14.2's acquisition manifest as read-only.
+
+---
+
+## CHAPTER 4 — RTL STANDARDIZATION PHILOSOPHY
+
+### 4.1 Purpose
+
+This chapter articulates the guiding philosophy under which all subsequent chapters' transformation rules are designed, so that any future extension of this specification can be evaluated for philosophical consistency rather than only rule-by-rule consistency.
+
+### 4.2 Theory
+
+Three philosophical commitments govern this subsystem:
+
+**Commitment 1 — Transformation, never correction.** The subsystem normalizes representation, not design intent. If RTL is ambiguous, non-synthesizable, or structurally unsound in a way that cannot be resolved through style-preserving transformation, it is classified and excluded (Chapter 26), never silently repaired. Silent repair would introduce an unaudited, benchmark-specific engineering judgment into the dataset, violating Objective 4 (provenance) and Objective 8 (reproducibility) simultaneously, since a "fix" is inherently a subjective act not derivable deterministically from the input alone.
+
+**Commitment 2 — Immutability of source, mutability of derivation.** This mirrors the Phase 14.2 principle that acquired RTL is never modified in place. Standardization always writes to a new, versioned derived-artifact location, and the original is retained unaltered as the referential ground truth for all downstream audits.
+
+**Commitment 3 — Determinism as a first-class deliverable.** Every rule in this specification is written such that, given the same input RTL and the same standardization configuration/tool version, the output is byte-for-byte identical across independent executions, machines, and operating systems, subject only to explicitly documented and logged environmental parameters (Chapter 40).
+
+### 4.3 Engineering Rationale
+
+These three commitments are not independent stylistic preferences; they are jointly necessary to satisfy the dataset-level requirement (inherited from Phase 14.1) that any physical-design outcome recorded downstream be attributable to genuine RTL/architectural properties rather than to an opaque, non-reproducible preprocessing artifact.
+
+### 4.4 Industrial Notes
+
+Commercial DTCO (Design Technology Co-Optimization) flows apply an analogous philosophy under the name "golden RTL freeze": once RTL enters a qualification flow, all subsequent tool-facing adaptations are recorded as auxiliary, reversible transformations layered on top of, never overwriting, the frozen source. This phase adopts that industrial pattern directly.
+
+### 4.5 Reviewer Expectations
+
+Reviewers should expect, and this specification provides, an explicit disambiguation in every subsequent chapter between "transformation" (permitted, logged, reversible) and "correction" (not permitted; triggers exclusion under Chapter 26).
+
+---
+
+## CHAPTER 5 — ARCHITECTURE OVERVIEW
+
+### 5.1 Purpose
+
+This chapter describes the structural architecture of the RTL Standardization & Normalization subsystem at a level sufficient for an independent group to reproduce an equivalent system, without specifying implementation.
+
+### 5.2 Architectural Components
+
+The subsystem is organized into six logical stages, each independently specified in later chapters:
+
+1. **Ingestion and Eligibility Stage** — consumes the Phase 14.2 acquisition manifest; applies Eligibility Rules (Chapter 10) to admit or reject each benchmark file for standardization.
+2. **Discovery Stage** — performs hierarchy mapping, top-module identification, clock discovery, and reset discovery (Chapters 15–18) without altering RTL content.
+3. **Resolution Stage** — resolves parameters, generate constructs, includes, packages, and external dependencies into an explicit, closed dependency graph (Chapters 19–23).
+4. **Normalization Stage** — applies deterministic naming, coding-style, and structural normalization transformations (Chapters 14, 27–28).
+5. **Validation Stage** — applies structural integrity and functional-equivalence-preserving checks (Chapters 33–34, 43–44).
+6. **Packaging Stage** — generates metadata, provenance records, manifests, and standardization reports (Chapters 29–31, 36).
+
+### 5.3 Dependencies
+
+The subsystem depends on the Phase 14.2 acquisition manifest and checksum records as its sole authoritative input reference, and produces the Phase 14.4 Standardization Manifest as its sole authoritative output reference for Phase 14.5.
+
+### 5.4 Industrial Notes
+
+This six-stage decomposition intentionally parallels the staged qualification architecture used in commercial IP-hardening and DTCO methodology flows, where discovery and resolution are always separated from destructive transformation, and validation always precedes packaging/handoff.
+
+### 5.5 Future Scalability
+
+The staged architecture allows any individual stage (e.g., Clock Discovery) to be upgraded independently — for example, to support a new RTL dialect — without requiring re-specification of unrelated stages, provided the stage's input/output contract (Chapters 6–7) remains unchanged.
+
+---
+
+## CHAPTER 6 — INPUTS
+
+### 6.1 Purpose
+
+This chapter fixes the exact input contract consumed by the RTL Standardization & Normalization subsystem.
+
+### 6.2 Inputs
+
+- The acquired RTL source tree for a given `benchmark_id`/`version_tag`, as delivered unmodified by Phase 14.2.
+- The Phase 14.2 acquisition manifest entry corresponding to that benchmark, including license classification, checksum record, and RTL-language declaration.
+- The Phase 14.4 Standardization Configuration, a versioned, benchmark-agnostic policy document specifying active transformation rules, naming conventions, and eligibility thresholds (this configuration is itself a versioned artifact under the four-axis versioning pattern established in Phase 14.3).
+
+### 6.3 Dependencies
+
+This stage has a hard dependency on the completion and validation of the corresponding Phase 14.2 acquisition record; no benchmark may enter standardization prior to acquisition sign-off, preserving pipeline stage ordering established in Phase 14.1.
+
+### 6.4 Failure Conditions
+
+Absence of a valid acquisition manifest entry, checksum mismatch against the Phase 14.2 record, or an undeclared/unsupported RTL language (Chapter 9) each constitute an ingestion failure, causing the benchmark to be logged as rejected-at-ingestion rather than silently skipped.
+
+### 6.5 Reviewer Expectations
+
+Reviewers will expect explicit confirmation that this stage performs a checksum re-verification against Phase 14.2 records prior to any processing, closing the audit loop between phases.
+
+---
+
+## CHAPTER 7 — OUTPUTS
+
+### 7.1 Purpose
+
+This chapter fixes the exact output contract produced by the RTL Standardization & Normalization subsystem, consumed by Phase 14.5.
+
+### 7.2 Outputs
+
+- A standardized RTL source tree, organized per Chapter 11, containing only derived artifacts (never the original source).
+- A per-benchmark Standardization Report (Chapter 36) documenting every transformation applied.
+- A per-benchmark Transformation Provenance record (Chapter 30) linking every derived file to its originating acquisition artifact and the exact rule set applied.
+- A Standardization Manifest (Chapter 31) aggregating all of the above at the corpus level, versioned under the four-axis pattern.
+- A structured log stream (Chapter 37) sufficient to reconstruct the full sequence of operations performed.
+- A disposition record for every excluded or quarantined file (Chapter 26), stating the specific exclusion reason.
+
+### 7.3 Industrial Notes
+
+The explicit separation between "Standardization Report" (human/reviewer-facing narrative) and "Transformation Provenance" (machine-consumable audit record) mirrors standard industrial practice of maintaining both a qualification report and a machine-readable traveler record for any manufactured or hardened artifact.
+
+---
+
+## CHAPTER 8 — WORKFLOW OVERVIEW
+
+### 8.1 Purpose
+
+This chapter presents the end-to-end control flow of the subsystem at a level consistent with the architecture in Chapter 5, without specifying implementation.
+
+### 8.2 Workflow
+
+Standardization proceeds, per benchmark, as a strictly ordered sequence: ingestion and eligibility screening; RTL language and dialect classification; hierarchy discovery; top-module identification; clock and reset discovery; parameter and generate-construct resolution; dependency, include, and package resolution; unsupported-construct scanning and quarantine decision; naming and coding-style normalization transformation; structural integrity validation; functional-equivalence-preserving validation; metadata and provenance generation; manifest update; and report emission. Any stage failure halts processing for that benchmark and routes it to the disposition/error-classification pathway (Chapter 41) rather than allowing partial, inconsistent output to propagate downstream.
+
+### 8.3 Engineering Rationale
+
+Strict ordering with hard-stop-on-failure is required because later stages (e.g., naming normalization) assume the invariants established by earlier stages (e.g., a fully resolved dependency graph); processing out of order or continuing past a failure would silently violate those invariants and compromise determinism.
+
+### 8.4 Validation
+
+The workflow itself is validated by confirming that re-execution against an unchanged input and configuration produces an identical sequence of stage transitions and an identical output artifact set, addressed further in Chapter 44.
+
+---
+
+## CHAPTER 9 — SUPPORTED RTL LANGUAGES
+
+### 9.1 Purpose
+
+This chapter defines the RTL language dialects the subsystem is specified to support, and the boundary conditions for mixed-language designs.
+
+### 9.2 Supported Dialects
+
+**Verilog (IEEE 1364, primarily the 1995/2001 subsets as commonly found in academic and legacy benchmark corpora).** Verilog benchmarks are standardized under the constraint that only synthesizable constructs are eligible; the full behavioral/simulation-oriented Verilog feature set is explicitly narrowed per Chapter 27.
+
+**SystemVerilog (IEEE 1800, synthesizable subset).** SystemVerilog benchmarks are standardized against the synthesizable subset conventionally supported by both open-source (Yosys-class) and commercial synthesis front ends; verification-only SystemVerilog constructs (e.g., assertions intended for simulation, classes, randomization constructs) are treated as unsupported per Chapter 26 unless isolated in files clearly separable from the synthesizable design (e.g., a distinct testbench directory, which is excluded from standardization scope entirely, not merely quarantined).
+
+**Mixed RTL.** Benchmarks composed of both Verilog and SystemVerilog modules are supported provided every module individually satisfies its respective dialect's synthesizable-subset requirement and the combined hierarchy resolves without dialect-driven semantic ambiguity (e.g., differing default net types across included files, which is explicitly checked in the Resolution Stage).
+
+### 9.3 Engineering Rationale
+
+Restricting support to these three categories, rather than attempting universal HDL support (e.g., VHDL, Chisel-generated intermediate forms), keeps the eligibility surface bounded and auditable, consistent with the benchmark corpus actually acquired under Phase 14.2, all of which is Verilog/SystemVerilog-based.
+
+### 9.4 Future Scalability
+
+Additional HDL dialects (e.g., VHDL benchmark suites) may be added in a future revision of this specification as an additional parallel dialect track, without altering the six-stage architecture of Chapter 5, provided a corresponding eligibility and construct-classification rule set (Chapters 10, 26) is authored for that dialect.
+
+---
+
+## CHAPTER 10 — RTL ELIGIBILITY RULES
+
+### 10.1 Purpose
+
+This chapter specifies the criteria under which an acquired benchmark file is admitted into the standardization pipeline versus rejected at ingestion.
+
+### 10.2 Eligibility Criteria
+
+A file is eligible for standardization if and only if: it is declared under a supported dialect (Chapter 9); its checksum matches the Phase 14.2 acquisition record; it does not consist exclusively of simulation-only or verification-only content (such content is out of scope entirely, not merely quarantined); and it is reachable from the benchmark's declared top module via the hierarchy discovered in Chapter 15, or is an explicitly declared package/include dependency thereof.
+
+### 10.3 Theory and Engineering Rationale
+
+Eligibility screening exists as a distinct, early stage so that ineligible content is identified before any resolution or normalization effort is expended on it, and so that eligibility decisions are recorded with the same rigor as transformation decisions, preserving full auditability of what fraction of each benchmark's acquired files actually enters the standardized dataset.
+
+### 10.4 Failure Conditions
+
+Files failing eligibility are not deleted; they are recorded in the disposition log with a specific rejection reason drawn from a fixed taxonomy (unsupported dialect, checksum mismatch, unreachable from hierarchy, verification-only content, license flag mismatch against the Phase 14.2 record).
+
+### 10.5 Reviewer Expectations
+
+Reviewers evaluating dataset coverage claims will expect the eligibility disposition log to fully reconcile against the original Phase 14.2 file inventory, with no unaccounted-for files.
+
+---
+
+## CHAPTER 11 — DIRECTORY ORGANIZATION
+
+### 11.1 Purpose
+
+This chapter specifies the directory structure of standardization outputs, designed for auditability and for direct, unambiguous consumption by Phase 14.5.
+
+### 11.2 Structure
+
+```
+standardized_rtl/
+├── <benchmark_id>/
+│   └── <version_tag>/
+│       ├── <standardization_version>/
+│       │   ├── rtl/
+│       │   │   ├── <normalized module tree, hierarchy-preserving>
+│       │   ├── metadata/
+│       │   │   ├── hierarchy_map.<ext>
+│       │   │   ├── clock_registry.<ext>
+│       │   │   ├── reset_registry.<ext>
+│       │   │   ├── parameter_resolution.<ext>
+│       │   │   └── dependency_graph.<ext>
+│       │   ├── provenance/
+│       │   │   └── transformation_provenance.<ext>
+│       │   ├── reports/
+│       │   │   └── standardization_report.<ext>
+│       │   ├── logs/
+│       │   │   └── <structured execution logs>
+│       │   └── quarantine/
+│       │       └── <excluded/unsupported files with disposition records>
+```
+
+### 11.3 Engineering Rationale
+
+The `<benchmark_id>/<version_tag>/<standardization_version>/` nesting directly extends the versioning pattern already established across Phases 14.2–14.3, ensuring that a standardized RTL artifact is always traceable to an exact acquisition version and an exact standardization policy version simultaneously — a five-axis traceability chain when combined with the annotation and dataset versioning axes of Phase 14.3.
+
+### 11.4 Industrial Notes
+
+Segregating `quarantine/` as a sibling of `rtl/`, rather than omitting quarantined files from the output tree entirely, ensures that reviewers and downstream auditors can inspect exactly what was excluded and why, without needing to cross-reference a separate system.
+
+---
+
+## CHAPTER 12 — DERIVED ARTIFACT POLICY
+
+### 12.1 Purpose
+
+This chapter formalizes the "derived artifact" concept referenced throughout this specification.
+
+### 12.2 Policy
+
+Every file produced by this subsystem is classified as a derived artifact: an output that exists solely as a deterministic function of (a) an acquired source file, (b) the active Standardization Configuration, and (c) the specific transformation rule set applied. Derived artifacts are never treated as authoritative substitutes for acquired source; they are always regenerable from their declared inputs, and this regenerability is itself a validation target (Chapter 44).
+
+### 12.3 Engineering Rationale
+
+Treating standardized RTL strictly as a derived artifact — rather than as a promoted, authoritative replacement for the original — preserves the Phase 14.2 immutability guarantee transitively through the entire pipeline and ensures that any future re-standardization (e.g., under a revised naming policy) can be performed without any risk to the underlying acquired corpus.
+
+### 12.4 Metadata
+
+Every derived artifact carries, at minimum: source file identity (`benchmark_id`, `version_tag`, original relative path, original checksum), the Standardization Configuration version applied, and the specific transformation rule identifiers invoked, per Chapter 29.
+
+---
+
+## CHAPTER 13 — IMMUTABILITY POLICY
+
+### 13.1 Purpose
+
+This chapter states, without ambiguity, the immutability guarantee governing this phase.
+
+### 13.2 Policy Statement
+
+The acquired RTL source tree delivered by Phase 14.2, for any `benchmark_id`/`version_tag`, shall never be modified, deleted, renamed, or reorganized by any process within this subsystem. All standardization output is written exclusively to the derived-artifact locations specified in Chapter 11. Any corrective action required due to a defect discovered in the standardization logic results in a new `standardization_version`, never an in-place edit of a prior version's output.
+
+### 13.3 Engineering Rationale
+
+This policy is the direct extension, into the standardization stage, of the "verbatim source never mutated in place" principle established in Phase 14.2 and the "immutable once published, corrections = new version not silent edit" principle established in Phase 14.3. Consistent application of this principle across all phases is what allows a single, uniform auditing methodology to span the entire pipeline.
+
+### 13.4 Validation
+
+Immutability is validated by an independent checksum comparison of the acquired source tree, performed both before and after any standardization run, with any discrepancy treated as a critical pipeline defect rather than a benign warning.
+
+### 13.5 Industrial Notes
+
+This mirrors the "golden reference lock" practice in commercial tapeout methodology, where the signed-off RTL baseline is placed under strict access control and every downstream engineering change is tracked as a delta against, never a replacement of, that baseline.
+
+---
+
+## CHAPTER 14 — NAMING STANDARDIZATION
+
+### 14.1 Purpose
+
+This chapter specifies the deterministic naming-normalization rules applied to RTL identifiers, the single most visible category of coding-style heterogeneity across a multi-origin benchmark corpus.
+
+### 14.2 Theory and Engineering Rationale
+
+Naming heterogeneity (e.g., inconsistent casing conventions, inconsistent prefixing of clock/reset signals, inconsistent generate-block labeling across benchmark suites originating from different academic or open-source groups) has no bearing on synthesized circuit behavior but has substantial bearing on the reliability of any downstream automated tooling — including the feature-extraction and graph-construction phases that follow this one in the overall pipeline — that relies on identifiable naming patterns (e.g., clock/reset signal detection heuristics) to function correctly across the full corpus. Standardizing names removes this class of tooling fragility without altering functional behavior, satisfying Objective 1 without violating the Chapter 4 "transformation, never correction" commitment, because renaming is a pure syntactic substitution with a fully deterministic, invertible mapping.
+
+### 14.3 Transformation Rules by Category
+
+**Module names.** Normalized to a fixed casing and separator convention; the original module name is retained in the Transformation Provenance record as the authoritative reverse-lookup key.
+
+**Instance names.** Normalized consistently with module naming conventions, with hierarchy-position disambiguation applied deterministically wherever the source RTL contains anonymous or auto-generated instance names, ensuring uniqueness is preserved without introducing benchmark-specific judgment.
+
+**Signal names.** Normalized under a fixed convention, with special-purpose signal categories (clock, reset — see Chapters 17–18) receiving a reserved naming pattern applied only after Discovery Stage classification confirms their functional role, never based on lexical guessing alone.
+
+**Parameters.** Normalized in name only; parameter values are never altered by this stage (value-level resolution is addressed separately in Chapter 19 as a metadata-recording activity, not a code-mutation activity).
+
+**Generate blocks.** Normalized to a deterministic labeling convention when the source RTL omits explicit generate-block labels, since unlabeled generate blocks are a common source of hierarchy-path ambiguity in downstream tooling.
+
+**Temporary nets.** Normalized under a reserved naming pattern distinct from designer-authored signal names, so that downstream feature-extraction tooling (a later phase) can unambiguously distinguish tool-introduced identifiers from original design intent.
+
+### 14.4 Metadata
+
+Every renaming operation is recorded as an explicit, bidirectional mapping entry (original identifier ↔ standardized identifier, scoped by hierarchy path) within the Transformation Provenance record, ensuring the renaming is fully reversible for audit purposes.
+
+### 14.5 Validation
+
+Naming standardization is validated by confirming (a) global uniqueness of all standardized identifiers within their applicable scope, (b) zero collisions introduced by the renaming process, and (c) full reversibility of the name mapping.
+
+### 14.6 Reviewer Expectations
+
+Reviewers will expect confirmation that renaming is purely syntactic and carries zero risk of altering signal connectivity or functional behavior; this is addressed structurally by restricting the Normalization Stage to operate strictly after the Resolution Stage has produced a closed, verified dependency and hierarchy graph (Chapter 5.2), so that renaming cannot occur against an incomplete or ambiguous structural model.
+
+---
+
+## CHAPTER 15 — HIERARCHY PRESERVATION
+
+### 15.1 Purpose
+
+This chapter specifies the guarantee that module hierarchy, as instantiated in the original RTL, is preserved exactly through standardization.
+
+### 15.2 Theory
+
+Hierarchy preservation is a structural invariant, distinct from and stricter than functional equivalence: it requires not merely that the standardized RTL simulate identically to the original, but that its instance tree topology remain isomorphic to the original's, module-for-module and instance-for-instance (modulo the deterministic renaming of Chapter 14). This stricter guarantee is required because downstream phases (feature extraction, graph construction) depend on hierarchy-path stability to correlate physical-design outcomes with specific RTL structural elements.
+
+### 15.3 Engineering Rationale
+
+Any transformation that flattens, merges, or restructures hierarchy — even if functionally equivalent — would sever this correlation and is therefore explicitly forbidden in this phase, deferring any such restructuring (e.g., synthesis-driven flattening) to Phase 14.5, where it can be recorded as a distinct, synthesis-attributable transformation rather than conflated with standardization.
+
+### 15.4 Validation
+
+Hierarchy preservation is validated by an automated structural comparison of the instance tree extracted from the original RTL against the instance tree extracted from the standardized RTL, requiring exact topological isomorphism under the recorded name mapping.
+
+### 15.5 Failure Conditions
+
+Any discrepancy in instance count, instantiation nesting, or port-connectivity topology between original and standardized hierarchy constitutes a validation failure, routing the benchmark to the error-classification pathway (Chapter 41) rather than permitting a partially preserved hierarchy to proceed downstream.
+
+---
+
+## CHAPTER 16 — TOP MODULE IDENTIFICATION
+
+### 16.1 Purpose
+
+This chapter specifies the procedure for deterministically identifying each benchmark's top-level module.
+
+### 16.2 Theory and Engineering Rationale
+
+Top-module identification is a prerequisite for hierarchy discovery, dependency resolution, and eligibility screening (a file is only in scope if reachable from the top module, per Chapter 10). Because benchmark suites vary in how the top module is declared (explicit build-system declaration, naming convention, single-uninstantiated-module inference), this subsystem applies a fixed precedence order: (1) an explicit top-module declaration present in the Phase 14.2 acquisition metadata, where available; (2) a build-system or project-file declaration shipped with the benchmark; (3) structural inference via identification of the unique module not instantiated by any other module in the corpus. Ambiguous cases where structural inference yields more than one candidate are not resolved automatically; they are routed to the eligibility disposition log as an identification failure.
+
+### 16.3 Metadata
+
+The identified top module, and the precedence rule by which it was identified, are recorded explicitly in the hierarchy metadata output (Chapter 11.2), providing a fully auditable justification for what would otherwise be an implicit assumption.
+
+### 16.4 Failure Conditions
+
+A benchmark for which no top module can be identified under any of the three precedence rules is excluded from standardization with an explicit disposition reason, consistent with the Chapter 4 "transformation, never correction" philosophy — the subsystem does not guess.
+
+---
+
+## CHAPTER 17 — CLOCK DISCOVERY
+
+### 17.1 Purpose
+
+This chapter specifies the procedure and metadata contract for identifying clock signals within each benchmark's hierarchy.
+
+### 17.2 Categories
+
+**Primary clocks.** Clock signals entering the design at a primary input port, identified through a combination of structural analysis (fan-out to clocked-storage-element clock pins) and, where available, benchmark-supplied constraint metadata carried forward from Phase 14.2 acquisition records.
+
+**Generated clocks.** Clock signals produced internally (e.g., via clock-divider or clock-gating logic) rather than entering at a primary input, identified through structural tracing from clocked-storage-element clock pins back through combinational or sequential clock-shaping logic to their originating source.
+
+**Multiple clock domains.** Benchmarks containing more than one independent clock source are explicitly supported; each discovered clock is recorded as an independent entry rather than the subsystem assuming a single-clock design, which would be an unsafe assumption across a heterogeneous corpus.
+
+**Clock metadata.** For every discovered clock, the subsystem records: signal identity (both original and standardized name), classification (primary/generated), source hierarchy path, and the set of clocked-storage-element instances driven by that clock, all committed to the Clock Registry (Chapter 11.2).
+
+### 17.3 Theory and Engineering Rationale
+
+Clock discovery is performed at the standardization stage, rather than deferred to synthesis, because downstream phases require clock identity to be a stable, benchmark-independent metadata field available prior to synthesis-tool-specific constraint generation; performing discovery once, centrally, and recording it explicitly avoids each downstream phase re-implementing inconsistent, tool-specific clock-inference heuristics.
+
+### 17.4 Validation
+
+Discovered clock signals are cross-checked against any benchmark-supplied constraint metadata (where such metadata exists in the acquisition record) as an independent consistency check; discrepancies are logged, not silently resolved.
+
+### 17.5 Failure Conditions
+
+A benchmark in which no clock can be discovered through structural analysis, and for which no acquisition-record constraint metadata exists to disambiguate, is flagged for manual disposition review rather than assumed to be a fully asynchronous or combinational design without explicit confirmation.
+
+---
+
+## CHAPTER 18 — RESET DISCOVERY
+
+### 18.1 Purpose
+
+This chapter specifies the procedure and metadata contract for identifying reset signals and their properties.
+
+### 18.2 Categories
+
+**Synchronous resets** — identified structurally as signals gating a clocked-storage-element's data input via a conditional aligned with the clock edge, rather than driving the element's dedicated reset pin.
+
+**Asynchronous resets** — identified structurally as signals driving a clocked-storage-element's dedicated asynchronous reset/set pin, independent of clock edge alignment.
+
+**Active-high / active-low polarity** — determined structurally from the sense of the reset conditional or the polarity convention of the dedicated reset pin, and recorded explicitly per discovered reset signal.
+
+**Multiple resets** — benchmarks containing more than one independent reset domain, or a mix of synchronous and asynchronous reset usage across different hierarchy branches, are explicitly supported and independently recorded, consistent with the multi-clock-domain support of Chapter 17.
+
+### 18.3 Metadata
+
+For every discovered reset signal, the Reset Registry (Chapter 11.2) records: signal identity, classification (sync/async), polarity, source hierarchy path, and the set of storage elements governed by that reset.
+
+### 18.4 Engineering Rationale
+
+Reset classification is required prior to synthesis because synchronous and asynchronous reset structures map to materially different standard-cell selections and timing constraint requirements in Phase 14.5; recording this classification once, centrally, and unambiguously prevents inconsistent reset handling from becoming a confounding variable in downstream physical-design outcome variance, mirroring the rationale given for clock discovery in Chapter 17.3.
+
+### 18.5 Failure Conditions
+
+Storage elements whose reset behavior cannot be unambiguously classified under this chapter's rules are flagged in the disposition log; the subsystem does not assume a default reset classification.
+
+---
+
+## CHAPTER 19 — PARAMETER RESOLUTION
+
+### 19.1 Purpose
+
+This chapter specifies how module and instance parameters are resolved and recorded without altering RTL parameter values.
+
+### 19.2 Theory and Engineering Rationale
+
+Parameterized RTL (width, depth, and configuration parameters propagated through instantiation overrides) is common across benchmark suites and directly affects downstream physical-design outcomes; leaving parameter resolution implicit would make it impossible for downstream phases to know, without re-elaborating the full RTL, what the effective parameter value is at any given hierarchy instance. This subsystem therefore performs parameter resolution as a read-only, metadata-recording activity: for every instance in the discovered hierarchy, the effective (fully overridden) value of every parameter is computed and recorded in the Parameter Resolution metadata (Chapter 11.2), while the RTL source itself — including all `parameter`/`localparam` declarations and instance-level override syntax — is left syntactically untouched except for the identifier-level renaming specified in Chapter 14.
+
+### 19.3 Validation
+
+Resolved parameter values are validated by confirming, for a structurally sampled subset of instances per benchmark, that independent re-elaboration of the standardized RTL yields identical effective parameter values to those recorded in the metadata, catching any resolution-logic defect prior to downstream consumption.
+
+### 19.4 Failure Conditions
+
+Parameters whose value depends on a construct outside the supported synthesizable subset (Chapter 27) cannot be resolved and cause the affected instance's benchmark to be routed to the unsupported-construct disposition pathway (Chapter 26).
+
+---
+
+## CHAPTER 20 — GENERATE CONSTRUCT HANDLING
+
+### 20.1 Purpose
+
+This chapter specifies how `generate`/`genvar`-based conditional and iterative hierarchy is handled during standardization.
+
+### 20.2 Theory and Engineering Rationale
+
+Generate constructs introduce hierarchy that is only fully determined after parameter resolution (Chapter 19); this subsystem therefore treats generate-construct elaboration as downstream of, and dependent on, parameter resolution within the Resolution Stage. The elaborated generate-block instance set is recorded in the hierarchy metadata exactly as any other instantiated hierarchy, with the deterministic labeling convention of Chapter 14.3 applied to any unlabeled block.
+
+### 20.3 Transformation Rules
+
+Generate-construct RTL syntax itself is not rewritten or unrolled in the standardized RTL source; only its labeling is normalized where originally absent, and its resolved elaboration outcome (number of generated instances, per-instance parameter bindings) is recorded as metadata, consistent with the Chapter 19 policy of metadata-level resolution rather than source-level rewriting.
+
+### 20.4 Failure Conditions
+
+Generate constructs whose condition or loop bound depends on a parameter that fails resolution under Chapter 19.4 inherit the same disposition pathway.
+
+---
+
+## CHAPTER 21 — DEPENDENCY RESOLUTION
+
+### 21.1 Purpose
+
+This chapter specifies how inter-file and inter-module dependencies are resolved into an explicit, closed dependency graph.
+
+### 21.2 Theory and Engineering Rationale
+
+A closed dependency graph — every module reference resolvable to exactly one defining file within the benchmark's acquired scope, with no unresolved external references — is a precondition for both hierarchy preservation (Chapter 15) validation and eligibility screening (Chapter 10). This subsystem constructs the dependency graph prior to any normalization transformation, ensuring that naming and structural transformations operate against a fully known, closed structural model rather than an incrementally discovered one.
+
+### 21.3 Outputs
+
+The resolved Dependency Graph (Chapter 11.2) records, for every module, its defining file, every module it instantiates, and every file-level include or package dependency it requires, forming the authoritative structural reference consumed by all later stages.
+
+### 21.4 Failure Conditions
+
+Any module reference that cannot be resolved within the benchmark's declared scope constitutes an unresolved-dependency failure, distinct from and reported separately from black-box or third-party-IP references (Chapters 24–25), which are explicitly declared as intentionally external rather than unresolved.
+
+---
+
+## CHAPTER 22 — INCLUDE FILE MANAGEMENT
+
+### 22.1 Purpose
+
+This chapter specifies how `\`include`-directive-based file inclusion is handled.
+
+### 22.2 Theory and Engineering Rationale
+
+Include-file usage varies significantly in convention across benchmark origins (some suites use includes purely for macro/parameter sharing; others use them for structural RTL sharing across near-duplicate modules). This subsystem preserves include-directive structure in the standardized output rather than performing textual pre-processing/flattening of includes into their including file, because flattening would obscure the original file-organization intent and complicate provenance tracking at the sub-file level. Include search-path resolution is instead performed once, deterministically, during the Resolution Stage and recorded in the Dependency Graph, ensuring every include directive resolves unambiguously regardless of the invoking tool's default search-path behavior.
+
+### 22.3 Failure Conditions
+
+An include directive that cannot be resolved to exactly one file within the benchmark's declared scope is treated as an unresolved dependency under Chapter 21.4.
+
+---
+
+## CHAPTER 23 — PACKAGE MANAGEMENT
+
+### 23.1 Purpose
+
+This chapter specifies how SystemVerilog `package` constructs are handled.
+
+### 23.2 Theory and Engineering Rationale
+
+Packages introduce a distinct namespace and import mechanism (`import pkg::*` or explicit scoped references) that must be resolved with the same rigor as module-level dependencies. This subsystem resolves package imports during the Resolution Stage, records the resulting namespace bindings in the Dependency Graph, and applies the naming standardization of Chapter 14 to package-scoped identifiers consistently with module-scoped identifiers, ensuring no naming-convention discontinuity exists at package boundaries.
+
+### 23.3 Failure Conditions
+
+An unresolvable package import is treated as an unresolved dependency under Chapter 21.4.
+
+---
+
+## CHAPTER 24 — BLACK BOX HANDLING
+
+### 24.1 Purpose
+
+This chapter specifies how intentionally undefined ("black box") module references are handled.
+
+### 24.2 Theory and Engineering Rationale
+
+Some benchmarks legitimately reference modules whose implementation is intentionally excluded from the RTL corpus (e.g., a memory macro represented only by its port interface, pending technology-specific instantiation at a later physical-design stage). Because a black box is a declared, expected condition rather than a resolution defect, this subsystem requires explicit black-box declarations to be present in the benchmark's acquisition metadata (Phase 14.2); an undeclared unresolved reference is never automatically inferred to be a black box, since doing so would risk silently masking a genuine dependency-resolution defect (Chapter 21.4).
+
+### 24.3 Metadata
+
+Declared black boxes are recorded in the Dependency Graph with an explicit `black_box` classification, distinct from `resolved` and `unresolved` classifications, and are excluded from hierarchy-preservation validation's connectivity checks at their unimplemented boundary while remaining included in the overall instance tree topology.
+
+### 24.4 Failure Conditions
+
+An unresolved reference lacking a corresponding declared black-box entry in the acquisition metadata is treated strictly as an unresolved dependency (Chapter 21.4), never reclassified automatically.
+
+---
+
+## CHAPTER 25 — THIRD-PARTY IP HANDLING
+
+### 25.1 Purpose
+
+This chapter specifies how third-party IP references, distinct from black boxes, are handled.
+
+### 25.2 Theory and Engineering Rationale
+
+Third-party IP differs from a black box in that it is a fully defined RTL module governed by a distinct license or provenance record from the primary benchmark (e.g., a shared, separately versioned peripheral IP reused across multiple benchmark projects within the corpus). This subsystem requires that any third-party IP module carry its own independent `benchmark_id`-equivalent provenance record from Phase 14.2, and that this provenance be preserved intact through standardization exactly as for any other acquired file, ensuring that license attribution remains file-level accurate even when the third-party IP is instantiated within a different top-level benchmark's hierarchy.
+
+### 25.3 Failure Conditions
+
+A third-party IP reference lacking independent provenance record is treated as an unresolved dependency (Chapter 21.4) rather than assumed to inherit the including benchmark's license classification.
+
+---
+
+## CHAPTER 26 — UNSUPPORTED RTL CONSTRUCT IDENTIFICATION
+
+### 26.1 Purpose
+
+This chapter specifies the taxonomy of RTL constructs excluded from the synthesizable subset, and the quarantine procedure applied when such constructs are detected.
+
+### 26.2 Unsupported Construct Taxonomy
+
+- **Simulation-only constructs** — constructs meaningful only within a simulation environment, absent physical synthesis correlate.
+- **Delay statements** (`#` delay controls) — timing-simulation constructs with no synthesis semantics.
+- **Specify blocks** — timing-annotation constructs outside the structural/behavioral synthesizable subset.
+- **Force/release statements** — simulation-only signal-override constructs.
+- **Behavioral-only constructs** — high-level behavioral descriptions lacking a defined synthesizable structural mapping (e.g., certain unconstrained loop or file-I/O constructs).
+- **Vendor primitives** — instantiations of proprietary, vendor-specific primitive libraries not portable across the vendor-independent flow required by Objective 5.
+- **Non-synthesizable tasks/functions** — tasks or functions containing any of the above construct categories internally.
+- **Unsupported system tasks** — simulation-facing system tasks (e.g., display/monitor-class tasks) with no synthesis role.
+
+### 26.3 Theory and Engineering Rationale
+
+Because Objective 5 requires compatibility with both open-source and commercial synthesis flows, and Objective 7 requires no PDK-specific assumptions, this subsystem defines "unsupported" conservatively, as the intersection of constructs unsupported by either flow class, rather than the union — ensuring standardized RTL is universally synthesis-ready rather than tool-specific.
+
+### 26.4 Quarantine Procedure
+
+A file containing an unsupported construct is not deleted or silently stripped of the offending construct; it is moved to the `quarantine/` directory (Chapter 11.2) in its original, acquired form, accompanied by a disposition record citing the specific construct category and location. If the unsupported construct is isolable to a clearly non-synthesizable auxiliary file (e.g., a testbench) rather than the synthesizable design itself, the design proceeds through standardization while the auxiliary file is quarantined independently, provided hierarchy reachability from the top module (Chapter 10.2) is unaffected by the auxiliary file's exclusion.
+
+### 26.5 Failure Conditions
+
+An unsupported construct detected within a file reachable from the top module, and not isolable as described in 26.4, causes the entire benchmark to be excluded from standardization with a full disposition record, rather than producing a partially standardized, non-synthesizable output.
+
+### 26.6 Reviewer Expectations
+
+Reviewers assessing dataset coverage will expect the quarantine disposition log, aggregated at the corpus level, to be reported transparently as part of the Standardization Report (Chapter 36), including the fraction of the corpus excluded and the distribution of exclusion reasons — consistent with the honesty-about-limitations principle carried forward from Phases 14.1–14.3.
+
+---
+
+## CHAPTER 27 — SYNTHESIZABLE RTL COMPLIANCE RULES
+
+### 27.1 Purpose
+
+This chapter specifies the positive definition of the synthesizable subset that standardized RTL must comply with, complementing the negative definition (excluded constructs) of Chapter 26.
+
+### 27.2 Compliance Rules
+
+Standardized RTL shall consist exclusively of: structural module/instance declarations; synthesizable procedural blocks (clocked sequential logic, combinational logic under a complete sensitivity specification); synthesizable expressions and operators as commonly supported across both open-source and commercial synthesis front ends; parameter and generate-construct usage as scoped in Chapters 19–20; and package/include usage as scoped in Chapters 22–23. Any construct not affirmatively covered by this positive definition, and not already excluded under Chapter 26's taxonomy, is treated as an open compliance question requiring an explicit addition to either this chapter or Chapter 26 before the corpus can include it, rather than being permitted by default.
+
+### 27.3 Engineering Rationale
+
+Defining compliance affirmatively, with unlisted constructs defaulting to non-compliant rather than compliant, is a deliberately conservative posture consistent with Objective 5 (universal flow compatibility) and prevents silent scope creep in what the subsystem considers synthesis-ready.
+
+### 27.4 Validation
+
+Compliance is validated through structural analysis of the standardized RTL confirming the complete absence of any Chapter 26 taxonomy construct and the presence of only Chapter 27.2-listed construct categories, performed as a final gate within the Validation Stage prior to packaging.
+
+---
+
+## CHAPTER 28 — CODING STYLE NORMALIZATION PHILOSOPHY
+
+### 28.1 Purpose
+
+This chapter articulates the philosophy governing coding-style-level normalization decisions not already covered by the naming rules of Chapter 14.
+
+### 28.2 Theory and Engineering Rationale
+
+Coding-style normalization at this phase is restricted to properties with zero functional or timing-semantic content: whitespace and indentation conventions, comment-block formatting, module-header ordering conventions, and port-declaration ordering/formatting conventions. It explicitly excludes any transformation with even indirect potential to influence synthesis outcomes (e.g., this subsystem never reorders procedural statements, never alters blocking/non-blocking assignment usage, and never restructures conditional logic), preserving the Chapter 4 "transformation, never correction" boundary at the statement-semantic level, not merely at the file level.
+
+### 28.3 Transformation Rules
+
+A single, fixed formatting convention (indentation width, brace/keyword-alignment style, port-list layout) is applied uniformly across the corpus, recorded once in the Standardization Configuration (Chapter 6.2) rather than varied per benchmark.
+
+### 28.4 Reviewer Expectations
+
+Reviewers will expect an explicit, itemized boundary statement — provided here — distinguishing the zero-functional-content formatting scope of this chapter from the structural, but still functionally neutral, naming scope of Chapter 14, and from the strictly out-of-scope territory of any statement-semantic rewriting.
+
+---
+
+## CHAPTER 29 — METADATA GENERATION
+
+### 29.1 Purpose
+
+This chapter specifies the general metadata schema requirements applicable across all artifact types produced by this subsystem, extending the field-by-field justification discipline established in Phase 14.3's annotation metadata schema.
+
+### 29.2 Required Metadata Fields
+
+Every derived artifact carries: `benchmark_id`, `version_tag` (inherited from Phase 14.2); `standardization_version` (this phase's own version axis); Standardization Configuration version applied; RTL dialect classification (Chapter 9); top-module identity (Chapter 16); applicable transformation rule identifiers (Chapters 14, 20, 27–28); and a content checksum of the derived artifact itself.
+
+### 29.3 Engineering Rationale
+
+Each field above is justified individually: `benchmark_id`/`version_tag` preserve upstream traceability (Objective 4); `standardization_version` and configuration version together make the transformation fully reproducible (Objective 8) by fixing every input to the deterministic function described in Chapter 12.2; dialect and top-module identity are required by Phase 14.5 to select an appropriate synthesis strategy without re-deriving them; transformation rule identifiers make every applied change auditable at the granularity of an individual rule; and the derived-artifact checksum enables downstream integrity verification independent of re-running standardization.
+
+### 29.4 Industrial Notes
+
+This field set mirrors, in structure though not in content, the "traveler" metadata attached to a manufactured part as it moves through a fabrication process — each field answers a specific, anticipated audit question rather than being included for general completeness.
+
+---
+
+## CHAPTER 30 — TRANSFORMATION PROVENANCE
+
+### 30.1 Purpose
+
+This chapter specifies the Transformation Provenance record introduced in Chapter 7.2, the machine-consumable audit record of every transformation applied to a given benchmark.
+
+### 30.2 Content
+
+For every applied transformation, the Provenance record captures: the transformation category (naming, generate-block labeling, formatting), the specific rule identifier invoked, the exact original and resulting values (for renaming operations, per Chapter 14.4), and the pipeline stage and timestamp at which it was applied.
+
+### 30.3 Engineering Rationale
+
+A per-transformation, rather than per-file, granularity is required because a single file may accumulate transformations from multiple independent rule categories (naming, generate-block labeling, formatting), and full auditability requires that each be individually attributable and, where applicable, individually reversible, rather than only the aggregate net change being recorded.
+
+### 30.4 Validation
+
+Provenance completeness is validated by confirming that replaying the recorded transformation sequence against the original acquired file reproduces the standardized output byte-for-byte, directly testing the Objective 8 reproducibility guarantee at the finest available granularity.
+
+---
+
+## CHAPTER 31 — MANIFEST UPDATES
+
+### 31.1 Purpose
+
+This chapter specifies the Standardization Manifest, the corpus-level aggregation of all per-benchmark metadata, provenance, and disposition records, and the sole authoritative reference consumed by Phase 14.5.
+
+### 31.2 Content
+
+The Standardization Manifest aggregates, across the full benchmark corpus processed under a given `standardization_version`: per-benchmark standardization status (succeeded / excluded / quarantined-partial), links to each benchmark's individual metadata and provenance records, aggregate eligibility and quarantine statistics (Chapter 26.6), and the exact Standardization Configuration version applied corpus-wide.
+
+### 31.3 Engineering Rationale
+
+Consuming a single, corpus-level manifest — rather than requiring Phase 14.5 to independently traverse per-benchmark records — establishes the same read-only-manifest consumption pattern by which Phase 14.4 itself consumes the Phase 14.2 acquisition manifest, preserving architectural consistency across the pipeline as required by the project's cross-phase consistency mandate.
+
+### 31.4 Version Control
+
+The Standardization Manifest is versioned as an independent axis alongside the `standardization_version` used for RTL artifacts themselves, consistent with the four-axis versioning pattern (dataset / annotation / schema / manifest) established in Phase 14.3, extended here as a fifth logical axis specific to standardization while preserving that pattern's independent-mutability principle: the manifest schema may be revised without requiring re-standardization of already-processed RTL, and vice versa.
+
+---
+
+## CHAPTER 32 — VERSION CONTROL STRATEGY
+
+### 32.1 Purpose
+
+This chapter consolidates the versioning strategy governing this phase's artifacts, building on the individual version-axis references distributed across Chapters 6, 11–13, and 31.
+
+### 32.2 Theory and Engineering Rationale
+
+This phase introduces two independently mutable version axes: `standardization_version` (governing the RTL transformation policy and its output) and Standardization Manifest version (governing the corpus-level aggregation schema). Independence between these axes allows a manifest schema correction (e.g., adding a new aggregate statistic field) without forcing full re-standardization of the RTL corpus, and conversely allows a re-standardization run (e.g., under a revised naming convention) without requiring a manifest schema change, directly extending the independent-mutability rationale established for the four annotation-related axes in Phase 14.3.
+
+### 32.3 Policy
+
+A new `standardization_version` is minted whenever any transformation rule (Chapters 14, 20, 27–28), eligibility rule (Chapter 10), or unsupported-construct taxonomy entry (Chapter 26.2) changes; prior versions' output is retained, never overwritten, consistent with Chapter 13's immutability policy applied to derived artifacts themselves.
+
+### 32.4 Industrial Notes
+
+This policy directly parallels the qualification-revision practice in commercial IP-hardening flows, where a change to the hardening methodology mints a new IP qualification revision rather than silently reissuing the prior revision's deliverable under the same identifier.
+
+---
+
+## CHAPTER 33 — STRUCTURAL INTEGRITY VALIDATION
+
+### 33.1 Purpose
+
+This chapter specifies the structural integrity checks applied to standardized RTL prior to packaging, as the first of the two validation categories referenced in Chapter 5.2's Validation Stage.
+
+### 33.2 Validation Checks
+
+- **Syntactic well-formedness** of every standardized file under its declared dialect grammar (Chapter 9).
+- **Hierarchy isomorphism** against the original acquired RTL, per Chapter 15.4.
+- **Dependency graph closure**, confirming zero unresolved references remain post-standardization, per Chapter 21.
+- **Compliance-rule conformance**, confirming the Chapter 27.4 affirmative synthesizable-subset check passes with zero exceptions.
+- **Naming-map completeness and uniqueness**, confirming every identifier renamed under Chapter 14 has a complete, collision-free bidirectional mapping entry.
+
+### 33.3 Engineering Rationale
+
+Structural integrity validation is deliberately positioned as a pure structural/syntactic check, independent of behavioral simulation, because it is fully automatable at corpus scale and catches the large majority of standardization defects (malformed transformation output, broken hierarchy references) at negligible computational cost relative to functional-equivalence validation (Chapter 34), which is reserved for a lighter-weight, sampled application given its higher computational cost.
+
+### 33.4 Failure Conditions
+
+Any structural integrity check failure halts packaging for the affected benchmark and routes it to the error-classification pathway (Chapter 41); no benchmark with a structural integrity failure is permitted to reach Phase 14.5.
+
+---
+
+## CHAPTER 34 — FUNCTIONAL EQUIVALENCE PHILOSOPHY
+
+### 34.1 Purpose
+
+This chapter articulates the functional-equivalence guarantee this phase provides and, critically, the precise boundary of what that guarantee does and does not certify, addressed directly to preempt an anticipated Artifact Evaluation objection.
+
+### 34.2 Theory and Engineering Rationale
+
+Because every transformation applied in this phase (Chapters 14, 20, 28) is restricted by design to syntactic renaming, deterministic labeling, and zero-functional-content formatting — with statement-semantic content explicitly untouched, per Chapter 28.2 — functional equivalence is, in the strict sense, a property guaranteed by construction rather than a property requiring exhaustive simulation-based proof for every benchmark. This phase's functional-equivalence philosophy is therefore twofold: (1) equivalence-by-construction is the primary guarantee, enforced through the restricted transformation-rule scope itself and audited via the reversibility check of Chapter 30.4; (2) sampled, corpus-representative equivalence checking (Chapter 34.3) serves as an independent empirical confirmation of the construction-based guarantee, catching any defect in the transformation implementation itself, not in the design methodology.
+
+### 34.3 Sampled Equivalence Checking
+
+A structurally representative, stratified sample of the standardized corpus (stratified across benchmark origin, dialect, and RTL size, consistent with the sampling philosophy anticipated by downstream Phase 14.1 statistics reporting) is subjected to equivalence checking between original and standardized RTL using standard combinational/sequential equivalence-checking methodology at the tool-agnostic level; full-corpus exhaustive equivalence checking is not mandated given the by-construction guarantee of 34.2, and this scope limitation is stated explicitly here rather than left implicit.
+
+### 34.4 Reviewer Expectations and Stated Limitations
+
+Consistent with the mandatory-honesty principle carried forward from Phases 14.1–14.3, this specification explicitly flags that functional equivalence is certified by construction and spot-validated by sampling, not exhaustively proven for every corpus member — a stated limitation rather than a concealed gap, and one directly attributable to the deliberately narrow, semantically inert transformation scope defined in Chapters 14, 20, and 28.
+
+---
+
+## CHAPTER 35 — RTL QUALITY METRICS
+
+### 35.1 Purpose
+
+This chapter specifies the descriptive quality metrics computed for every standardized benchmark, feeding the corpus-level Dataset Statistics deliverable inherited from the Phase 14.1 master pipeline.
+
+### 35.2 Metrics
+
+| Category | Metrics |
+|---|---|
+| Size | Lines of code (LOC), module count, file count |
+| Structure | Hierarchy depth, instance count per module, generate-block count |
+| Signals | Signal count by category (input/output/inout/internal), average fan-out |
+| Clocks | Clock domain count, primary vs. generated clock ratio |
+| Resets | Reset domain count, sync vs. async ratio, polarity distribution |
+| Parameters | Parameter count, resolved value distribution, generate-construct usage frequency |
+
+### 35.3 Engineering Rationale
+
+These metrics are computed at the standardization stage, rather than deferred to feature extraction, because they describe RTL-intrinsic structural properties independent of any physical-design outcome, and recording them here provides an early, synthesis-independent characterization of corpus diversity useful for both dataset-statistics reporting and identifying benchmark selection gaps prior to the computational expense of the full physical-design flow.
+
+### 35.4 Industrial Notes
+
+This metric set mirrors standard RTL "complexity scorecards" used in commercial DTCO methodology reviews to characterize a design's structural profile prior to committing synthesis and physical design resources.
+
+---
+
+## CHAPTER 36 — STANDARDIZATION REPORTS
+
+### 36.1 Purpose
+
+This chapter specifies the human/reviewer-facing Standardization Report, distinct from the machine-consumable Transformation Provenance (Chapter 30).
+
+### 36.2 Content
+
+Each per-benchmark Standardization Report narratively summarizes: eligibility disposition outcome; discovered hierarchy, clock, and reset summary; applied transformation categories and counts; quarantine/exclusion outcome if applicable, with reason; RTL quality metrics (Chapter 35); and validation outcomes (Chapters 33–34). A corpus-level Standardization Report aggregates these into overall coverage, exclusion-rate, and quality-metric distribution statistics.
+
+### 36.3 Engineering Rationale
+
+The narrative report exists specifically to satisfy the publication/reviewer-facing framing principle carried forward from Phases 14.2–14.3: an Artifact Evaluation reviewer should be able to read the corpus-level report alone and obtain a complete, honest characterization of dataset coverage and standardization outcomes without needing to parse machine-readable provenance records directly.
+
+---
+
+## CHAPTER 37 — LOGGING STRATEGY
+
+### 37.1 Purpose
+
+This chapter specifies the structured execution-logging requirements supporting reproducibility (Objective 8) and failure diagnosis (Chapter 41).
+
+### 37.2 Requirements
+
+Every pipeline stage transition (Chapter 8.2) emits a structured log entry recording: benchmark identity, stage identity, stage outcome (success/failure/exclusion), timestamp, and, on failure, the specific failure classification (Chapter 41). Logs are append-only and retained indefinitely per benchmark/`standardization_version` combination, consistent with the immutability philosophy of Chapter 13 applied to audit records themselves.
+
+### 37.3 Engineering Rationale
+
+Structured, append-only logging at stage-transition granularity allows exact reconstruction of the workflow sequence (Chapter 8.4 validation requirement) for any individual benchmark without requiring re-execution, and provides the primary diagnostic input for the error-classification and recovery strategy of Chapters 41–42.
+
+---
+
+## CHAPTER 38 — AUTOMATION ARCHITECTURE
+
+### 38.1 Purpose
+
+This chapter specifies the architectural requirements for automating this subsystem at corpus scale, consistent with Objective 6.
+
+### 38.2 Requirements
+
+The automation architecture shall: (1) treat each benchmark as an independently processable unit with no cross-benchmark state dependency, enabling the batch and parallel-execution strategies of Chapters 39–40; (2) expose every stage of the Chapter 8.2 workflow as an independently invocable, idempotent operation, such that a rerun of any single stage against unchanged inputs produces unchanged outputs, directly supporting the reproducibility validation of Chapter 44; and (3) require zero manual, per-benchmark configuration in steady-state operation, with all benchmark-specific behavior driven exclusively by the Phase 14.2 acquisition metadata and the corpus-wide Standardization Configuration (Chapter 6.2).
+
+### 38.3 Engineering Rationale
+
+Independent, idempotent, per-benchmark processability is the architectural precondition for both horizontal scaling (Chapter 40) and safe partial-corpus reprocessing (e.g., reprocessing only newly acquired benchmarks under an existing `standardization_version` without disturbing already-processed entries).
+
+---
+
+## CHAPTER 39 — BATCH PROCESSING PHILOSOPHY
+
+### 39.1 Purpose
+
+This chapter specifies the philosophy governing batch-scale execution across the full benchmark corpus.
+
+### 39.2 Theory and Engineering Rationale
+
+Batch processing is treated as the repeated, independent application of the single-benchmark workflow (Chapter 8.2) across the corpus, with no batch-level shared mutable state beyond the append-only Standardization Manifest aggregation (Chapter 31) performed strictly after each constituent benchmark's individual processing completes. This ordering guarantee ensures that a failure in one benchmark's processing can never corrupt or block the successful processing of any other benchmark, directly supporting the large-scale automation required by Objective 6.
+
+### 39.3 Failure Conditions
+
+A batch run is never treated as fully successful or fully failed as a single unit; batch-level reporting instead aggregates the per-benchmark disposition outcomes (Chapters 10.4, 26.4–26.5, 33.4) into the corpus-level Standardization Report (Chapter 36.2).
+
+---
+
+## CHAPTER 40 — PARALLEL EXECUTION CONSIDERATIONS
+
+### 40.1 Purpose
+
+This chapter specifies the requirements for safe parallel execution across benchmarks, and the environmental parameters that must be logged to preserve the determinism guarantee of Objective 8 under parallel execution.
+
+### 40.2 Requirements
+
+Parallel execution across independent benchmarks is permitted without restriction, given the independence guarantee of Chapter 38.2(1). Parallel execution must not, however, introduce any nondeterminism into a single benchmark's output; where any stage's implementation could plausibly introduce execution-order-dependent nondeterminism (e.g., in structural analysis traversal order affecting generated-identifier assignment order under Chapter 14.3's generate-block labeling), the deterministic ordering rule applied must itself be fixed and logged as part of the Standardization Configuration, not left to incidental execution-environment behavior.
+
+### 40.3 Environmental Metadata
+
+Tool versions, host operating system class, and any other environmental parameter with plausible influence on output determinism are logged per Chapter 37.2 and referenced explicitly in the Chapter 4.2 Commitment 3 determinism guarantee's scope statement, consistent with that commitment's "subject only to explicitly documented and logged environmental parameters" qualification.
+
+---
+
+## CHAPTER 41 — ERROR CLASSIFICATION
+
+### 41.1 Purpose
+
+This chapter specifies the fixed taxonomy of failure classifications referenced throughout this document, ensuring every failure routed to this pathway carries an unambiguous, corpus-comparable classification.
+
+### 41.2 Classification Taxonomy
+
+| Class | Description | Originating Chapters |
+|---|---|---|
+| Ingestion Failure | Acquisition manifest missing/checksum mismatch/unsupported dialect | 6.4, 9 |
+| Eligibility Rejection | File out of scope per eligibility criteria | 10.4 |
+| Identification Failure | Top module cannot be determined | 16.4 |
+| Discovery Ambiguity | Clock/reset cannot be unambiguously classified | 17.5, 18.5 |
+| Resolution Failure | Unresolved dependency, include, package, or parameter | 19.4, 21.4, 22.3, 23.3 |
+| Construct Non-Compliance | Unsupported construct detected, not isolable | 26.5 |
+| Structural Integrity Failure | Post-transformation structural check failure | 33.4 |
+| Functional Equivalence Failure | Sampled equivalence check discrepancy | 34.3 |
+
+### 41.3 Engineering Rationale
+
+A fixed, closed taxonomy — rather than free-text failure descriptions — is required so that corpus-level failure-rate statistics (feeding the Chapter 36.2 aggregate report) are directly comparable across benchmark origins, dialects, and `standardization_version` revisions, supporting trend analysis of standardization robustness over the life of the project.
+
+---
+
+## CHAPTER 42 — RECOVERY STRATEGY
+
+### 42.1 Purpose
+
+This chapter specifies the recovery pathway following a classified failure (Chapter 41).
+
+### 42.2 Policy
+
+No failure classification triggers automatic corrective modification of RTL content, consistent with the Chapter 4 "transformation, never correction" commitment. Recovery, where possible, occurs exclusively through one of two channels: (1) a Standardization Configuration revision (e.g., extending the Chapter 27.2 compliance rule set to affirmatively cover a previously unlisted but genuinely synthesizable construct), which mints a new `standardization_version` and is reprocessed corpus-wide under Chapter 32.3; or (2) permanent exclusion of the affected benchmark from the eligible corpus, recorded transparently in the Standardization Report.
+
+### 42.3 Engineering Rationale
+
+Restricting recovery to configuration-level, corpus-wide policy revisions — rather than per-benchmark exceptions — preserves the "no benchmark-specific assumptions" non-negotiable design principle stated in the project's governing requirements, ensuring any rule change benefits, and is validated against, the full corpus rather than a single benchmark in isolation.
+
+---
+
+## CHAPTER 43 — QUALITY ASSURANCE
+
+### 43.1 Purpose
+
+This chapter specifies the quality-assurance program applied to the subsystem itself, distinct from the per-benchmark validation of Chapters 33–34.
+
+### 43.2 QA Program Elements
+
+- **Configuration regression testing** — every Standardization Configuration revision is validated against a fixed regression benchmark subset spanning all supported dialects and construct categories prior to corpus-wide application.
+- **Cross-run determinism auditing** — periodic re-execution of previously processed benchmarks under an unchanged `standardization_version`, confirming byte-identical output, directly testing Objective 8 in steady-state operation, not only at initial release.
+- **Disposition-log reconciliation** — periodic reconciliation of the eligibility, quarantine, and exclusion disposition logs against the full Phase 14.2 acquisition inventory, confirming zero unaccounted-for files, extending the Chapter 10.5 reviewer-expectation check into an ongoing QA activity.
+
+### 43.3 Engineering Rationale
+
+Distinguishing subsystem-level QA from per-benchmark validation reflects the difference between verifying that the standardization policy itself is sound (QA) and verifying that a specific benchmark's output conforms to that policy (validation) — both are necessary, and conflating them would leave policy-level defects undetected even when every individual benchmark passes its own validation.
+
+---
+
+## CHAPTER 44 — VALIDATION STRATEGY
+
+### 44.1 Purpose
+
+This chapter consolidates the overall validation strategy for this phase, cross-referencing the distributed validation requirements of Chapters 15.4, 16, 19.3, 30.4, 33, and 34.
+
+### 44.2 Validation Layers
+
+| Layer | Scope | Method |
+|---|---|---|
+| Structural | Per-benchmark hierarchy, dependency, compliance | Automated structural comparison and rule conformance checking (Ch. 33) |
+| Functional | Per-benchmark behavior preservation | By-construction guarantee plus sampled equivalence checking (Ch. 34) |
+| Provenance | Per-transformation reversibility | Replay reconstruction against original source (Ch. 30.4) |
+| Reproducibility | Cross-run, cross-machine determinism | Repeated execution comparison, byte-identical output requirement (Ch. 43.2) |
+| Corpus | Aggregate coverage and disposition accounting | Disposition-log reconciliation against acquisition inventory (Ch. 43.2) |
+
+### 44.3 Engineering Rationale
+
+Presenting validation as five explicitly distinct layers, rather than a single undifferentiated "testing" activity, directly supports Artifact Evaluation review by allowing a reviewer to map each of this phase's stated guarantees (Objectives 3, 4, 8) to a specific, independently inspectable validation layer.
+
+---
+
+## CHAPTER 45 — INDUSTRIAL CONSIDERATIONS
+
+### 45.1 Purpose
+
+This chapter situates the subsystem's design choices relative to established industrial DTCO and IP-hardening methodology practice, consolidating the industrial-notes references distributed throughout this document.
+
+### 45.2 Discussion
+
+The subsystem's core architectural pattern — golden-source immutability (Ch. 4.4, 13.5), staged discovery-before-transformation (Ch. 5.4), qualification-revision versioning (Ch. 32.4), and traveler-style metadata (Ch. 29.4) — collectively mirror the methodology infrastructure maintained by commercial semiconductor design-enablement teams for IP qualification and technology-portable RTL hardening. This alignment is a deliberate design choice, not incidental: a dataset-generation pipeline intended to support DTCO research (per this project's overall research title) gains external validity precisely to the degree that its data-engineering methodology reflects practices already trusted within the industry it aims to model and improve upon.
+
+### 45.3 Reviewer Expectations
+
+Reviewers from an industrial or applied-EDA background will specifically look for this kind of explicit methodology grounding; its absence is a common Artifact Evaluation objection to academic dataset-generation pipelines, which this chapter directly preempts.
+
+---
+
+## CHAPTER 46 — PUBLICATION READINESS
+
+### 46.1 Purpose
+
+This chapter states the publication-readiness posture of this phase's deliverables, consistent with the corresponding chapters in Phases 14.1–14.3.
+
+### 46.2 Readiness Statement
+
+This phase's deliverables — the Standardization Manifest, per-benchmark and corpus-level Standardization Reports, and the full RTL Quality Metrics dataset (Chapter 35) — are designed to be releasable as supplementary material accompanying a submission to any of the target venues listed in this document's header, without further redaction, since no acquired RTL content requiring license-based redaction handling is altered or newly exposed by this phase beyond what Phase 14.2 already cleared for release.
+
+### 46.3 Engineering Rationale
+
+Because this phase's outputs never expose RTL content beyond what Phase 14.2 already classified as license-cleared and release-eligible, this phase introduces no new license-compliance review burden, and its publication-readiness posture is therefore strictly inherited from, not independently re-derived from, the Phase 14.2 license compliance determination.
+
+---
+
+## CHAPTER 47 — IEEE ARTIFACT EVALUATION READINESS
+
+### 47.1 Purpose
+
+This chapter specifies how this phase's deliverables satisfy IEEE Artifact Evaluation (AE) expectations specifically, as distinct from general publication readiness (Chapter 46).
+
+### 47.2 AE Readiness Elements
+
+- **Reproducibility package** — the Standardization Configuration, corpus-level Standardization Manifest, and logging output (Chapter 37) together constitute a complete reproducibility package sufficient for an AE reviewer to re-execute standardization against the Phase 14.2 acquisition corpus and independently verify byte-identical output, directly operationalizing Objective 8 for AE purposes.
+- **Auditable exclusions** — the disposition logs (Chapters 10.4, 26.4–26.5) provide AE reviewers a complete accounting of corpus coverage, preempting the common AE objection that a dataset's effective coverage is unclear relative to its claimed source corpus.
+- **Documented limitations** — the Chapter 34.4 functional-equivalence scope statement is written specifically to satisfy the AE expectation that claimed guarantees be scoped honestly rather than overstated.
+
+### 47.3 Engineering Rationale
+
+Each AE readiness element above maps directly to a specific, named AE reviewer concern rather than being a generic reproducibility claim, consistent with the project's recurring rhetorical pattern of explicitly preempting anticipated reviewer objections.
+
+---
+
+## CHAPTER 48 — FUTURE SCALABILITY
+
+### 48.1 Purpose
+
+This chapter consolidates the distributed future-scalability notes of Chapters 5.5 and 9.4 and identifies additional forward-compatibility considerations not yet addressed elsewhere.
+
+### 48.2 Scalability Considerations
+
+**Additional RTL dialects.** As noted in Chapter 9.4, a new dialect track may be added without restructuring the six-stage architecture, provided corresponding eligibility and construct-classification rules are authored.
+
+**Corpus growth.** The independent, per-benchmark processability guarantee of Chapter 38.2(1) ensures corpus growth requires no architectural change; new benchmarks are simply additional independent units within the existing batch-processing philosophy (Chapter 39).
+
+**Standardization policy evolution.** The Chapter 32 version-control strategy ensures policy evolution (e.g., a revised naming convention, or an extended synthesizable-subset definition under Chapter 27) is accommodated through the existing versioning mechanism without requiring any change to already-published prior-version artifacts.
+
+**Multi-PDK and future-node support.** Because this phase, by design, embeds no PDK-specific assumptions (Objective 7), standardized RTL output requires no modification when the downstream flow targets a new PDK or technology node; only the downstream Phase 14.5 synthesis configuration need change, isolating future-node support entirely outside this phase's revision surface.
+
+### 48.3 Engineering Rationale
+
+Each scalability consideration above is traced to a specific architectural or policy mechanism already specified earlier in this document, rather than asserted as an unsupported claim, consistent with the project's requirement that every design decision include engineering justification.
+
+---
+
+## CHAPTER 49 — DELIVERABLES
+
+### 49.1 Purpose
+
+This chapter enumerates the complete, final deliverable set of Phase 14.4, serving as the authoritative handoff checklist to Phase 14.5.
+
+### 49.2 Deliverable Checklist
+
+| # | Deliverable | Specified In |
+|---|---|---|
+| 1 | Standardized RTL source tree (all eligible benchmarks) | Ch. 7.2, 11 |
+| 2 | Per-benchmark Standardization Report | Ch. 36 |
+| 3 | Corpus-level Standardization Report | Ch. 36 |
+| 4 | Per-benchmark Transformation Provenance record | Ch. 30 |
+| 5 | Standardization Manifest (corpus-level) | Ch. 31 |
+| 6 | Hierarchy Map, Clock Registry, Reset Registry, Parameter Resolution, Dependency Graph (per benchmark metadata set) | Ch. 11.2, 15–23 |
+| 7 | Quarantine directory with disposition records | Ch. 11.2, 26.4 |
+| 8 | RTL Quality Metrics dataset (corpus-level) | Ch. 35 |
+| 9 | Structured execution logs | Ch. 37 |
+| 10 | Standardization Configuration (versioned policy document) | Ch. 6.2, 32 |
+| 11 | Reproducibility package (for AE submission) | Ch. 47.2 |
+
+### 49.3 Handoff Statement
+
+This deliverable set constitutes the complete, closed handoff to Phase 14.5 (Logic Synthesis). Phase 14.5 shall consume the Standardization Manifest as its sole authoritative entry point, exactly as this phase consumed the Phase 14.2 acquisition manifest, preserving the read-only, manifest-mediated inter-phase consumption pattern established across the series.
+
+---
+
+## DOCUMENT CONTROL
+
+**Phase:** 14.4 — RTL Standardization & Normalization Specification
+**Predecessor Phases:** 14.1 (Dataset Generation Pipeline), 14.2 (BDAS — Benchmark Acquisition), 14.3 (DALGS — Annotation & Label Generation)
+**Successor Phase:** 14.5 — Logic Synthesis
+**Scope Exclusions (restated):** No synthesis content, no feature extraction content, no label generation content, no routing content — reserved for their respective phases.
+**Status:** Specification complete, non-implementational, publication-oriented.
+
+*End of Phase 14.4.*
