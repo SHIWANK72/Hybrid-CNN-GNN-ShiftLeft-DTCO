@@ -1,72 +1,85 @@
-# Copyright (c) 2026 NVIDIA + Synopsys + Google DeepMind.
-# All rights reserved.
-# Licensed under the Apache License, Version 2.0.
+"""Post-global-placement CNN–GNN laboratory predictor.
 
+Outputs spatial global-route utilization and a normalized design-level timing
+regression value. Checkpoint preprocessing supplies its physical-unit inverse.
+DRC, foundry sign-off and pre-placement prediction are outside this model.
 """
-Core architectural definition combining GraphSAGE, U-Net, and ScatterFusion.
-"""
+from typing import Any, Dict
 
 import torch
-import torch.nn as nn
-from typing import Dict, Any, Optional
-from hybrid_dtco.utils.logger import get_logger
+from torch import nn
+from torch_geometric.nn import global_mean_pool
 
-logger = get_logger(__name__)
+from .cnn_unet import SpatialUNet
+from .gnn_cluster import GraphEncoder
+from .scatter_fusion import ScatterFusionLayer
 
 
 class HybridDTCOModel(nn.Module):
-    """
-    Full Shift-Left DTCO model predicting Congestion, WNS, and DRC violations
-    from pre-placement netlists.
-    """
-
-    def __init__(self, config: Dict[str, Any]) -> None:
-        """
-        Initializes the comprehensive Hybrid model.
-
-        Args:
-            config: Configuration dictionary specifying layer sizes and fusion parameters.
-        """
+    def __init__(self, config: Dict[str, Any]):
         super().__init__()
-        self.config = config
-        
-        # TODO: Instantiate GNN encoder (e.g., GraphSAGE/ClusterGCN)
-        # self.gnn_encoder = None 
-        
-        # TODO: Instantiate ScatterFusion module
-        # self.fusion_module = None
-        
-        # TODO: Instantiate CNN decoder (U-Net)
-        # self.cnn_decoder = None
-
-        logger.info("Instantiated abstract HybridDTCOModel.")
+        self.config = dict(config)
+        hidden = config.get("hidden_channels", 24)
+        grid = tuple(config.get("grid_size", (16, 16)))
+        self.node_channels = config.get("node_channels", 10)
+        self.spatial_channels = config.get("spatial_channels", 3)
+        self.global_channels = config.get("global_channels", 6)
+        self.grid_size = grid
+        self.gnn_encoder = GraphEncoder(self.node_channels, hidden)
+        self.fusion_module = ScatterFusionLayer(hidden, hidden, grid)
+        self.cnn_decoder = SpatialUNet(self.spatial_channels + hidden, hidden)
+        self.congestion_head = nn.Conv2d(hidden, 1, 1)
+        self.timing_head = nn.Sequential(
+            nn.Linear(hidden * 2 + self.global_channels, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1),
+        )
 
     def forward(
-        self, 
-        x: torch.Tensor, 
-        edge_index: torch.Tensor, 
-        pos: torch.Tensor, 
-        batch: torch.Tensor
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Forward pass of the hybrid model.
-
-        Args:
-            x: Node features [N, F].
-            edge_index: Graph connectivity [2, E].
-            pos: Physical coordinates of nodes [N, 2].
-            batch: Batch assignment vector [N].
-
-        Returns:
-            Dictionary containing prediction tensors:
-                - 'congestion': 2D grid congestion map.
-                - 'wns': Node-level timing slack predictions.
-                - 'drc': Binary violation probabilities.
-                
-        Raises:
-            NotImplementedError: Pending module composition.
-        """
-        # TODO: gnn_out = self.gnn_encoder(x, edge_index)
-        # TODO: spatial_grid = self.fusion_module(gnn_out, pos)
-        # TODO: out_dict = self.cnn_decoder(spatial_grid)
-        raise NotImplementedError("HybridDTCOModel forward pass is not implemented.")
+        self, x, edge_index, pos, batch=None, spatial=None, global_features=None
+    ):
+        if x.ndim != 2 or x.shape[1] != self.node_channels:
+            raise ValueError("Wrong node feature dimensions")
+        if (
+            edge_index.ndim != 2
+            or edge_index.shape[0] != 2
+            or edge_index.dtype != torch.long
+        ):
+            raise ValueError("Edges must be a [2, E] integer tensor")
+        if edge_index.numel() and (edge_index.min() < 0 or edge_index.max() >= len(x)):
+            raise ValueError("Edge index outside node range")
+        if batch is None:
+            batch = torch.zeros(len(x), dtype=torch.long, device=x.device)
+        if edge_index.numel() and not torch.equal(
+            batch[edge_index[0]], batch[edge_index[1]]
+        ):
+            raise ValueError("Edges may not cross graph boundaries")
+        encoded = self.gnn_encoder(x, edge_index)
+        _, raster = self.fusion_module(encoded, pos, batch=batch)
+        b = raster.shape[0]
+        if spatial is None:
+            spatial = x.new_zeros((b, self.spatial_channels, *self.grid_size))
+        if spatial.shape != (b, self.spatial_channels, *self.grid_size):
+            raise ValueError("Wrong spatial feature dimensions")
+        if global_features is None:
+            global_features = x.new_zeros((b, self.global_channels))
+        if global_features.shape != (b, self.global_channels):
+            raise ValueError("Wrong global feature dimensions")
+        if (
+            not torch.isfinite(spatial).all()
+            or not torch.isfinite(global_features).all()
+        ):
+            raise ValueError("Features must be finite")
+        decoded = self.cnn_decoder(torch.cat((spatial, raster), dim=1))
+        timing_input = torch.cat(
+            (
+                global_mean_pool(encoded, batch),
+                decoded.mean(dim=(2, 3)),
+                global_features,
+            ),
+            dim=1,
+        )
+        return {
+            "congestion": torch.nn.functional.softplus(self.congestion_head(decoded)),
+            "timing": self.timing_head(timing_input).squeeze(-1),
+        }

@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "sample_id": "alu-v0",
+  "real_http_health": true,
+  "real_http_prediction_matches_direct_checkpoint": true,
+  "invalid_input_status": 422,
+  "cli_matches_http": true,
+  "http_feature_and_inference_seconds": 0.046540972999991936,
+  "scope": "Local-only lab service; latency excludes upstream EDA."
+}
