@@ -1,0 +1,35 @@
+# Supported Tcl/OpenDB bindings. Encode names as base64 UTF-8 for TSV safety.
+proc enc {value} {
+    return [binary encode base64 -maxlen 0 [encoding convertto utf-8 $value]]
+}
+read_db $::env(DTCO_EARLY_ODB)
+set block [ord::get_db_block]
+set out [open $::env(DTCO_GRAPH_OUTPUT) w]
+fconfigure $out -encoding utf-8
+set core [$block getCoreArea]
+puts $out [join [list META [$block getDbUnitsPerMicron] [$core xMin] [$core yMin] [$core xMax] [$core yMax]] "\t"]
+set index 0
+foreach inst [$block getInsts] {
+    set name [$inst getName]
+    dict set node_ids $name $index
+    set bbox [$inst getBBox]
+    set master [$inst getMaster]
+    puts $out [join [list NODE $index [enc $name] [enc [$master getName]] [$bbox xMin] [$bbox yMin] [$bbox getDX] [$bbox getDY] [enc [$inst getPlacementStatus]]] "\t"]
+    incr index
+}
+set net_index 0
+foreach net [$block getNets] {
+    if { [$net getSigType] in {POWER GROUND} } { continue }
+    puts $out [join [list NET $net_index [enc [$net getName]]] "\t"]
+    foreach pin [$net getITerms] {
+        set inst [$pin getInst]
+        set terminal [$pin getMTerm]
+        puts $out [join [list PIN $net_index [dict get $node_ids [$inst getName]] [enc [$terminal getName]] [enc [$pin getIoType]]] "\t"]
+    }
+    foreach port [$net getBTerms] {
+        puts $out [join [list PORT $net_index [enc [$port getName]] [enc [$port getIoType]]] "\t"]
+    }
+    incr net_index
+}
+close $out
+puts "Exported $index instances and $net_index signal nets"

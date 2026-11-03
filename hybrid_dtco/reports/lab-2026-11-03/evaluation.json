@@ -1,0 +1,146 @@
+{
+  "schema_version": "0.1.0",
+  "checkpoint_sha256": "4d80aa0ed1844aa0d71677393198a63178e07fabd2e2f2a6f9e19b7e07ac46c7",
+  "split_protocol": "All variants of a family remain in one split; candidate selection used validation only.",
+  "training_families": [
+    "accumulator",
+    "fifo",
+    "gcd"
+  ],
+  "held_out_families": [
+    "alu",
+    "arbiter"
+  ],
+  "held_out_samples": 6,
+  "metrics": {
+    "hybrid_delay_mae_ns": 0.3821906201328374,
+    "mean_baseline_delay_mae_ns": 0.9235151608784994,
+    "ridge_baseline_delay_mae_ns": 0.3127015898182078,
+    "hybrid_grid_mae": 0.0703811136384805,
+    "mean_baseline_grid_mae": 0.08699932004027587,
+    "ridge_baseline_grid_mae": 0.0907809300577721
+  },
+  "by_family": {
+    "alu": {
+      "hybrid_delay_mae_ns": 0.6042229447993748,
+      "mean_baseline_delay_mae_ns": 0.8930713865492078,
+      "ridge_baseline_delay_mae_ns": 0.4594325575357425,
+      "hybrid_grid_mae": 0.059830869237581887,
+      "mean_baseline_grid_mae": 0.08287997131830908,
+      "ridge_baseline_grid_mae": 0.07211497291088521
+    },
+    "arbiter": {
+      "hybrid_delay_mae_ns": 0.16015829546630003,
+      "mean_baseline_delay_mae_ns": 0.9539589352077908,
+      "ridge_baseline_delay_mae_ns": 0.16597062210067307,
+      "hybrid_grid_mae": 0.08093135803937912,
+      "mean_baseline_grid_mae": 0.09111866876224263,
+      "ridge_baseline_grid_mae": 0.10944688720465896
+    }
+  },
+  "samples": [
+    {
+      "id": "alu-v0",
+      "family": "alu",
+      "truth_effective_delay_ns": 5.1579999923706055,
+      "prediction_effective_delay_ns": 3.806971001137992,
+      "truth_worst_setup_slack_ns": 14.842000007629395,
+      "prediction_worst_setup_slack_ns": 16.193028998862008,
+      "hybrid_delay_mae_ns": 1.3510289912326137,
+      "mean_baseline_delay_mae_ns": 1.755943218866984,
+      "ridge_baseline_delay_mae_ns": 0.9435748106540336,
+      "hybrid_grid_mae": 0.04659293591976166,
+      "mean_baseline_grid_mae": 0.0656425846262007,
+      "ridge_baseline_grid_mae": 0.06049328497959742,
+      "tensor_inference_seconds": 0.00711799400005475,
+      "checkpoint_reload_matches": true
+    },
+    {
+      "id": "alu-v1",
+      "family": "alu",
+      "truth_effective_delay_ns": 3.5191800594329834,
+      "prediction_effective_delay_ns": 3.3438462985017487,
+      "truth_worst_setup_slack_ns": 2.4808199405670166,
+      "prediction_worst_setup_slack_ns": 2.6561537014982513,
+      "hybrid_delay_mae_ns": 0.17533376093123465,
+      "mean_baseline_delay_mae_ns": 0.11712328592936183,
+      "ridge_baseline_delay_mae_ns": 0.22257222930806986,
+      "hybrid_grid_mae": 0.05521388351917267,
+      "mean_baseline_grid_mae": 0.07511462084949017,
+      "ridge_baseline_grid_mae": 0.06010171070289403,
+      "tensor_inference_seconds": 0.002429547000247112,
+      "checkpoint_reload_matches": true
+    },
+    {
+      "id": "alu-v2",
+      "family": "alu",
+      "truth_effective_delay_ns": 2.5959091186523438,
+      "prediction_effective_delay_ns": 2.8822152008866198,
+      "truth_worst_setup_slack_ns": 0.40409088134765625,
+      "prediction_worst_setup_slack_ns": 0.11778479911338025,
+      "hybrid_delay_mae_ns": 0.286306082234276,
+      "mean_baseline_delay_mae_ns": 0.8061476548512778,
+      "ridge_baseline_delay_mae_ns": 0.21215063264512413,
+      "hybrid_grid_mae": 0.07768578827381134,
+      "mean_baseline_grid_mae": 0.1078827084792364,
+      "ridge_baseline_grid_mae": 0.09574992305016419,
+      "tensor_inference_seconds": 0.0024957970003924856,
+      "checkpoint_reload_matches": true
+    },
+    {
+      "id": "arbiter-v0",
+      "family": "arbiter",
+      "truth_effective_delay_ns": 3.7595999240875244,
+      "prediction_effective_delay_ns": 3.578629657390808,
+      "truth_worst_setup_slack_ns": 16.240400075912476,
+      "prediction_worst_setup_slack_ns": 16.421370342609194,
+      "hybrid_delay_mae_ns": 0.18097026669671656,
+      "mean_baseline_delay_mae_ns": 0.35754315058390285,
+      "ridge_baseline_delay_mae_ns": 0.23659424685909602,
+      "hybrid_grid_mae": 0.07274247705936432,
+      "mean_baseline_grid_mae": 0.08515222923597321,
+      "ridge_baseline_grid_mae": 0.09934004413241893,
+      "tensor_inference_seconds": 0.0019015399998352223,
+      "checkpoint_reload_matches": true
+    },
+    {
+      "id": "arbiter-v1",
+      "family": "arbiter",
+      "truth_effective_delay_ns": 2.3844399452209473,
+      "prediction_effective_delay_ns": 2.459434201083191,
+      "truth_worst_setup_slack_ns": 3.6155600547790527,
+      "prediction_worst_setup_slack_ns": 3.540565798916809,
+      "hybrid_delay_mae_ns": 0.07499425586224362,
+      "mean_baseline_delay_mae_ns": 1.0176168282826743,
+      "ridge_baseline_delay_mae_ns": 0.14126466953376626,
+      "hybrid_grid_mae": 0.07551535218954086,
+      "mean_baseline_grid_mae": 0.08632584407071894,
+      "ridge_baseline_grid_mae": 0.1085947609788353,
+      "tensor_inference_seconds": 0.0020037849999425816,
+      "checkpoint_reload_matches": true
+    },
+    {
+      "id": "arbiter-v2",
+      "family": "arbiter",
+      "truth_effective_delay_ns": 1.9153399467468262,
+      "prediction_effective_delay_ns": 2.139850310586766,
+      "truth_worst_setup_slack_ns": 1.0846600532531738,
+      "prediction_worst_setup_slack_ns": 0.8601496894132339,
+      "hybrid_delay_mae_ns": 0.22451036383993994,
+      "mean_baseline_delay_mae_ns": 1.4867168267567954,
+      "ridge_baseline_delay_mae_ns": 0.12005294990915694,
+      "hybrid_grid_mae": 0.09453624486923218,
+      "mean_baseline_grid_mae": 0.10187793298003575,
+      "ridge_baseline_grid_mae": 0.1204058565027227,
+      "tensor_inference_seconds": 0.0018859670003621432,
+      "checkpoint_reload_matches": true
+    }
+  ],
+  "baseline_protocol": "Training mean spatial map/effective delay and fixed-strength ridge models fit only to training; spatial ridge uses early raster channels.",
+  "limitations": [
+    "Only two tiny held-out original-design families: not a generalization benchmark.",
+    "Global-route utilization is a proxy, not overflow/DRC qualification.",
+    "Reported latency excludes feature extraction and all required upstream EDA.",
+    "No independent assessor or calibrated uncertainty."
+  ]
+}

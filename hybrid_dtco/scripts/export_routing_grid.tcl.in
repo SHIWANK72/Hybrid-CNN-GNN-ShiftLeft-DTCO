@@ -1,0 +1,21 @@
+# Export actual OpenDB per-routing-layer demand/capacity after global routing.
+read_db $::env(DTCO_ROUTED_ODB)
+set block [ord::get_db_block]
+set grid [$block getGCellGrid]
+if {$grid == "NULL"} { error "Missing routing grid" }
+set out [open $::env(DTCO_ROUTING_OUTPUT) w]
+set die [$block getDieArea]
+puts $out [join [list META [$block getDbUnitsPerMicron] [$die xMin] [$die yMin] [$die xMax] [$die yMax]] "\t"]
+set xs [$grid getGridX]
+set ys [$grid getGridY]
+puts $out "X\t[join $xs \t]"
+puts $out "Y\t[join $ys \t]"
+foreach layer [[ord::get_db_tech] getLayers] {
+    if {[$layer getRoutingLevel] <= 0} { continue }
+    for {set x 0} {$x < [llength $xs]} {incr x} {
+        for {set y 0} {$y < [llength $ys]} {incr y} {
+            puts $out [join [list CELL [$layer getName] $x $y [$grid getCapacity $layer $x $y] [$grid getUsage $layer $x $y]] "\t"]
+        }
+    }
+}
+close $out
